@@ -34,6 +34,9 @@ public:
         /// scene, which leaves it crisp already (TitleUpscale). 0: no such part.
         float sharpen_centre = 0.0f;
         float centre_radius = 0.0f;
+        /// 0..1: how strongly edges are smoothed first, by morphological anti-aliasing (MLAA,
+        /// host_shaders/post_process.frag). 0: not at all.
+        float mlaa = 0.0f;
     };
 
     void Create(const Instance& instance, MasterSemaphore* master_semaphore,

@@ -93,6 +93,22 @@ struct Larger : Builds::Sizes {
     s32 extra_memory_mb{};
 };
 
+/// The size of the sun's largest shadow maps asked for: SHADPS4_TITLE_SUN_SHADOW_MAP=<4096|8192>
+/// (SHADPS4_TITLE_SUN_SHADOW_4096=1 is 4096), 0 for the title's 2048
+/// (Builds::SunShadowChanges). For a picture with several times the console's pixels: shadow
+/// edges in steps half or a quarter as large, the shaders' filter as much narrower.
+u32 SunShadowMapSize() {
+    static const u32 size = [] {
+        if (const char* value = std::getenv("SHADPS4_TITLE_SUN_SHADOW_MAP"); value != nullptr) {
+            const int asked = std::atoi(value);
+            return asked == 4096 || asked == 8192 ? static_cast<u32>(asked) : 0u;
+        }
+        const char* old = std::getenv("SHADPS4_TITLE_SUN_SHADOW_4096");
+        return old != nullptr && std::atoi(old) != 0 ? 4096u : 0u;
+    }();
+    return size;
+}
+
 const Larger& GetLarger() {
     static const Larger larger = [] {
         Larger result;
@@ -121,9 +137,14 @@ const Larger& GetLarger() {
         };
         result.target_pool = static_cast<u32>(megabytes(Builds::ConsoleTargetPool));
         result.small_pool = static_cast<u32>(megabytes(Builds::ConsoleSmallPool));
-        const u64 growth = (result.target_pool - Builds::ConsoleTargetPool) +
-                           (result.small_pool - Builds::ConsoleSmallPool) +
-                           static_cast<u64>(200.0 * MB * (pixels - 1.0));
+        u64 growth = (result.target_pool - Builds::ConsoleTargetPool) +
+                     (result.small_pool - Builds::ConsoleSmallPool) +
+                     static_cast<u64>(200.0 * MB * (pixels - 1.0));
+        // The larger pool of larger sun shadow maps (SunShadowMapSize) is taken from the same
+        // heap.
+        if (const u32 sun = SunShadowMapSize(); sun != 0) {
+            growth += Builds::ShadowPoolFor(sun) - Builds::ConsoleShadowPool;
+        }
         result.graphics_heap = Builds::ConsoleGraphicsHeap + growth;
         result.extra_memory_mb = static_cast<s32>((growth + 256 * MB) / (256 * MB) * 256);
         return result;
@@ -269,18 +290,39 @@ const Settings& GetSettings() {
             parsed.physics_watch = std::atoi(value) != 0;
         }
         // SHADPS4_TITLE_LOD=<share>: the distances at which models change to their coarser
-        // forms, as a share of the title's own (0.33 = a third); SHADPS4_TITLE_SHADOW_MAP=
-        // <1024|1536>: the sun's shadow maps no larger than that; SHADPS4_TITLE_DEPTH_PREPASS=0:
-        // the scene's depth not drawn on its own first.
+        // forms, as a share of the title's own (0.33 = a third, 2 = twice as far, for a picture
+        // with twice the console's pixels to a degree); SHADPS4_TITLE_SHADOW_MAP=<1024|1536>:
+        // the sun's shadow maps no larger than that; SHADPS4_TITLE_SHADOW_MAP_MIN=<1536|2048>:
+        // none smaller (the bosses' and the whale's levels have 1024 and 1536);
+        // SHADPS4_TITLE_DEPTH_PREPASS=0: the scene's depth not drawn on its own first.
         if (const char* value = std::getenv("SHADPS4_TITLE_LOD"); value != nullptr) {
             const double share = std::atof(value);
             if (share > 0.0) {
-                parsed.scene_detail.lod_scale = std::clamp(share, 0.1, 1.0);
+                parsed.scene_detail.lod_scale = std::clamp(share, 0.1, 4.0);
             }
         }
         if (const char* value = std::getenv("SHADPS4_TITLE_SHADOW_MAP"); value != nullptr) {
             const int size = std::atoi(value);
             parsed.scene_detail.shadow_map_size = size == 1024 || size == 1536 ? size : 0;
+        }
+        if (const char* value = std::getenv("SHADPS4_TITLE_SHADOW_MAP_MIN"); value != nullptr) {
+            const int size = std::atoi(value);
+            parsed.scene_detail.shadow_map_min = size == 1536 || size == 2048 ? size : 0;
+        }
+        // SHADPS4_TITLE_SPOT_SHADOW_MAP_MIN=1024: the spot lights' shadow maps no smaller than
+        // that (the largest the title has room for; some of its files ask for 512).
+        if (const char* value = std::getenv("SHADPS4_TITLE_SPOT_SHADOW_MAP_MIN");
+            value != nullptr) {
+            parsed.scene_detail.spot_shadow_map_min = std::atoi(value) == 1024 ? 1024 : 0;
+        }
+        // (SHADPS4_TITLE_SUN_SHADOW_MAP: SunShadowMapSize. With SHADPS4_TITLE_SHADOW_MAP_MIN=2048
+        // every level with sun shadows asks for the largest.)
+        // SHADPS4_TITLE_SHADOW_NEAR_SPLIT=<metres>: the sun's near shadow cascade ends no
+        // farther away than that (Scenes::Detail::near_split).
+        if (const char* value = std::getenv("SHADPS4_TITLE_SHADOW_NEAR_SPLIT");
+            value != nullptr) {
+            const double metres = std::atof(value);
+            parsed.scene_detail.near_split = metres >= 1.0 && metres <= 50.0 ? metres : 0.0;
         }
         if (const char* value = std::getenv("SHADPS4_TITLE_DEPTH_PREPASS"); value != nullptr) {
             parsed.scene_detail.depth_prepass = std::atoi(value) != 0;
@@ -1475,6 +1517,29 @@ void OnGameLoaded(VAddr base, u64 size) {
             LOG_INFO(Core, "The title's soccer robots count their frames as the console's");
         }
     }
+    if (const u32 sun = SunShadowMapSize(); sun != 0) {
+        const auto changes = Builds::SunShadowChanges(*build, sun);
+        if (larger.factor == 1.0) {
+            // Their pool grows, which the heap has room for only where it grew too.
+            LOG_WARNING(Core, "The sun's shadow maps stay 2048x2048 at most: {}x{} ones need "
+                              "the larger pictures (SHADPS4_TITLE_EYE_WIDTH) for their memory",
+                        sun, sun);
+        } else if (changes.empty()) {
+            LOG_WARNING(Core, "Where this build makes its sun shadow maps is not known: they "
+                              "stay 2048x2048 at most");
+        } else if (const Builds::Change* unexpected = Builds::Apply(image, changes);
+                   unexpected != nullptr) {
+            LOG_WARNING(Core,
+                        "The title does not have {:#x} at {:#x} as expected: its sun shadow maps "
+                        "stay 2048x2048 at most",
+                        unexpected->was, unexpected->at);
+        } else {
+            LOG_INFO(Core,
+                     "The sun's shadow maps are {}x{} where a scene asks for 2048 (their pool "
+                     "{} MB)",
+                     sun, sun, Builds::ShadowPoolFor(sun) >> 20);
+        }
+    }
     known_base = base;
     known_build.store(build, std::memory_order_release);
 }
@@ -1575,6 +1640,16 @@ std::filesystem::path SceneFile(std::string_view guest_path, std::filesystem::pa
     }
     if (detail.shadow_map_size != 0) {
         add(fmt::format("shadow maps of {} at most", detail.shadow_map_size));
+    }
+    if (detail.shadow_map_min != 0 && !Scenes::LeavesSunShadowsOut(detail, name)) {
+        add(fmt::format("shadow maps of {} at least", detail.shadow_map_min));
+    }
+    if (detail.spot_shadow_map_min != 0) {
+        add(fmt::format("spot light shadow maps of {} at least", detail.spot_shadow_map_min));
+    }
+    if (const double ratio = Scenes::NearSplitRatio(text, detail, name); ratio >= 0.0) {
+        add(fmt::format("the sun's near shadow cascade to {:.1f} m (split ratio {:.3f})",
+                        detail.near_split, ratio));
     }
     if (!detail.depth_prepass) {
         add("no depth pre-pass");

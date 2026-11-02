@@ -1441,8 +1441,20 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
         return value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
                                 : 0.0f;
     }();
+    // SHADPS4_VR_MLAA=<0..1>: edges in the eyes' pictures smoothed on the way by morphological
+    // anti-aliasing at that strength (1 when left out; 0: not at all).
+    static const float mlaa = [] {
+        const char* value = std::getenv("SHADPS4_VR_MLAA");
+        const float strength =
+            value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
+                             : 1.0f;
+        LOG_INFO(Render_Vulkan, "Headset pictures: MLAA {}",
+                 strength > 0.0f ? fmt::format("at strength {}", strength) : std::string{"off"});
+        return strength;
+    }();
     auto hmd_settings = pp_settings;
     hmd_settings.sharpen = sharpen;
+    hmd_settings.mlaa = mlaa;
     hmd_settings.encoded_in = encoded_in ? 1 : 0;
     // Where FSR 1 enlarged the title's scene (TitleUpscale), the picture is crisp already:
     // sharpened by SHADPS4_VR_SHARPEN_FSR there (half of the rest by default).

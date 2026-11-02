@@ -32,6 +32,18 @@ constexpr std::array<std::array<u32, 2>, 7> ConsoleSizes{{
 constexpr u32 ConsoleTargetPool = 0xc800000;
 constexpr u32 ConsoleSmallPool = 0xa00000;
 constexpr u64 ConsoleGraphicsHeap = 0x36800000;
+// The pool of 50 MB, from the same heap, that the title's shadow maps (and the mask of its
+// hero's drop shadow) are taken from: the sun's (16 MB), the spot lights' (32 MB), the mask's
+// (2 MB), full. Larger sun maps need it larger by what they take more (ShadowPoolFor); the
+// title stops with "RenderTarget memory is full" otherwise (tried 2026-11-01).
+constexpr u32 ConsoleShadowPool = 0x3200000;
+constexpr u32 ConsoleSunShadowMap = 2048;
+/// The pool for sun shadow maps of `size` pixels a side (two layers of 16 bits), 2 MB to spare:
+/// 100 MB for 4096, 292 MB for 8192.
+constexpr u32 ShadowPoolFor(u32 size) {
+    const u64 more = u64{size} * size * 4 - u64{ConsoleSunShadowMap} * ConsoleSunShadowMap * 4;
+    return static_cast<u32>(ConsoleShadowPool + more + 0x200000);
+}
 // The time one frame stands for, as the title's engine has it before the title runs.
 constexpr double ConsoleFrameRate = 60.0;
 constexpr float ConsoleFrameSeconds = 1.0f / 60.0f;
@@ -114,6 +126,22 @@ struct Build {
     /// own instead, 1/60 s (FrameCountChanges). The one place that takes the step for the time
     /// that passed is left as it is.
     std::array<Change, 6> frame_counts;
+    /// What makes the sun's largest shadow maps 4096x4096 or 8192x8192 instead of 2048x2048
+    /// (SunShadowChanges, which fills in what each place is to hold).
+    /// The title makes one target of each size the scene files may name at its start (1024,
+    /// 1536 and 2048 for the sun, two layers: its two cascades) and picks the one whose size
+    /// the scene asks for, the 2048 one for any size it does not know: a scene asking for 4096
+    /// got the 2048 target (tried 2026-11-01). The places, each a 32-bit operand unless said:
+    /// the value the files' "2048" is registered as (mov esi, 0x800); the one place that sets a
+    /// scene's size to 2048 itself (mov [rbx+0xd0], 0x800, after resetting its parameters); the
+    /// 2048 target's width (the top 16 bits of a movabs rcx of its description) and height (a
+    /// 16-bit mov to the stack); the size the cascades are snapped to whole pixels of
+    /// (mov [rbx+0xce8], 0x800 in the shadows' constructor, read by the cascade set-up).
+    /// The pass takes its viewport and filter spacing from the scene's size, so that and the
+    /// target change together. Last, the size of the pool the shadow maps are taken from, as
+    /// asked of the heap and as written down (ConsoleShadowPool), which the heap is to have
+    /// room for besides. Places of no bytes: not found in that build.
+    std::array<Change, 7> sun_shadow_places;
 };
 
 inline constexpr std::array<Build, 2> Known{{
@@ -153,6 +181,19 @@ inline constexpr std::array<Build, 2> Known{{
                           {0x8439d1, 0xffffda689559eac5, 0x0088dcbb1559eac5, 8},
                           {0x843a01, 0xffffda689559cac5, 0x0088dc8b1559cac5, 8},
                           {0x843a2b, 0xffffda689559eac5, 0x0088dc611559eac5, 8}}},
+        // Found 2026-11-01: the registration of SceneParameter's properties (the strings
+        // "DirShadowMapSize" at 0x110e654, "2048" at 0x110e665); the reset at 0xbcf960; the
+        // targets made in 0xf13380's function (handles kept at +0x1b90/2/4, picked at 0xf1efdb
+        // and 0xf2f44f); the shadows' constructor 0xf9b510, its cascade set-up 0xf9c280.
+        // What each is to hold is SunShadowChanges' to say.
+        .sun_shadow_places = {{{0x241cf6, 0x800, 0, 4},
+                               {0xbcf98a, 0x800, 0, 4},
+                               {0xf13844, 0x0800002500020000, 0, 8},
+                               {0xf13871, 0x800, 0, 2},
+                               {0xf9b65d, 0x800, 0, 4},
+                               // mov esi, <size>; mov qword [r12+0x28c058], <size> (0xef8bd6).
+                               {0xef8bd7, ConsoleShadowPool, 0, 4},
+                               {0xef8c18, ConsoleShadowPool, 0, 4}}},
     },
     {
         .name = "1.04, the last update",
@@ -263,6 +304,32 @@ inline std::vector<Change> PhysicsStepChanges(const Build& build) {
 /// The soccer robots' frame counts made seconds of at the console's frame (Build::frame_counts).
 inline std::vector<Change> FrameCountChanges(const Build& build) {
     return {build.frame_counts.begin(), build.frame_counts.end()};
+}
+
+/// The sun's 2048x2048 shadow maps made `size` (4096 or 8192) a side, with all that goes by
+/// their size and the pool they are taken from (Build::sun_shadow_places). Empty where the
+/// build's places are not known or the size is not one of those.
+inline std::vector<Change> SunShadowChanges(const Build& build, u32 size) {
+    if (size != 4096 && size != 8192) {
+        return {};
+    }
+    std::vector<Change> changes;
+    for (size_t i = 0; i < build.sun_shadow_places.size(); ++i) {
+        Change change = build.sun_shadow_places[i];
+        if (change.bytes == 0) {
+            return {};
+        }
+        if (i == 2) {
+            // The description: its width in the top 16 bits.
+            change.now = (change.was & 0x0000ffffffffffffull) | (u64{size} << 48);
+        } else if (i >= 5) {
+            change.now = ShadowPoolFor(size);
+        } else {
+            change.now = size;
+        }
+        changes.push_back(change);
+    }
+    return changes;
 }
 
 /// The first of some places that does not hold what the console's build has there (or lies

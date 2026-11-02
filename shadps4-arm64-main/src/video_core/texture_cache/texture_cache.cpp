@@ -1163,6 +1163,23 @@ void TextureCache::RegisterImage(ImageId image_id) {
     if (TraceImages()) {
         TraceImage("new", image.info, image_id.index);
     }
+    // Arrays of depth images are what titles keep shadow maps in (ASTRO BOT: the sun's two
+    // cascades, the spot lights' eight): where each first comes up and how large, a few times,
+    // to see from a session's log whether shadow maps made larger than a title's own
+    // (SHADPS4_TITLE_SHADOW_MAPS_DOUBLED) end before what follows them in its memory.
+    if (image.info.props.is_depth && image.info.resources.layers >= 2) {
+        static std::mutex logged_mutex;
+        static std::unordered_set<u64> logged;
+        const u64 key = image.info.guest_address ^ (u64{image.info.size.width} << 48) ^
+                        (u64{image.info.resources.layers} << 40);
+        std::scoped_lock lock{logged_mutex};
+        if (logged.size() < 24 && logged.insert(key).second) {
+            LOG_INFO(Render_Vulkan, "Depth array {}x{}x{} {} at {:#x} to {:#x}",
+                     image.info.size.width, image.info.size.height, image.info.resources.layers,
+                     vk::to_string(image.info.pixel_format), image.info.guest_address,
+                     image.info.guest_address + image.info.guest_size);
+        }
+    }
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;

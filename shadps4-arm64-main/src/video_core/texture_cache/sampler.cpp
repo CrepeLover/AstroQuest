@@ -15,19 +15,36 @@ namespace VideoCore {
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                  const AmdGpu::BorderColorBuffer border_color_base) {
     using namespace Vulkan;
-    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
-                                   (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
-                                    AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
+    const bool requested = AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
+                           AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
+    // SHADPS4_FORCE_ANISO=<n> (16 when left out, 0 or 1: as the title asks): every sampler that
+    // filters smoothly between mip levels, or asks for some anisotropic filtering already, gets
+    // up to n samples along a texture seen at a slant. Not depth comparisons (shadow maps).
+    static const float force_aniso = [] {
+        const char* value = std::getenv("SHADPS4_FORCE_ANISO");
+        const float n = value != nullptr ? static_cast<float>(std::atof(value)) : 16.0f;
+        if (n > 1.0f) {
+            LOG_INFO(Render_Vulkan, "Anisotropic filtering raised to {}x on mipmapped textures", n);
+        }
+        return n;
+    }();
+    const bool mipmapped = sampler.xy_min_filter != AmdGpu::Filter::Point &&
+                           sampler.mip_filter != AmdGpu::MipFilter::None && sampler.MaxLod() > 0.0f;
+    const bool forced = force_aniso > 1.0f &&
+                        sampler.depth_compare_func == AmdGpu::DepthCompare::Never &&
+                        (requested || mipmapped);
+    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() && (requested || forced);
     // SHADPS4_MAX_ANISO=<n>: no more than n samples along a texture seen at a slant, whatever
     // the title asks for (a measuring aid: what that filtering costs).
     static const float aniso_cap = [] {
         const char* value = std::getenv("SHADPS4_MAX_ANISO");
         return value != nullptr ? std::max(1.0f, static_cast<float>(std::atof(value))) : 16.0f;
     }();
+    const float wanted = forced ? std::max(sampler.MaxAniso(), force_aniso) : sampler.MaxAniso();
     const float max_anisotropy =
-        anisotropy_enable ? std::clamp(sampler.MaxAniso(), 1.0f,
-                                       std::min(instance.MaxSamplerAnisotropy(), aniso_cap))
-                          : 1.0f;
+        anisotropy_enable
+            ? std::clamp(wanted, 1.0f, std::min(instance.MaxSamplerAnisotropy(), aniso_cap))
+            : 1.0f;
     if (anisotropy_enable) {
         // Which ratios a title asks for, the first few times each.
         static std::array<std::atomic<u32>, 17> seen{};

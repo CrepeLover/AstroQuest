@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -26,10 +27,29 @@ namespace Core::KnownTitle::Scenes {
 
 struct Detail {
     /// The distances at which models change to coarser forms, as a share of the title's own.
-    /// The last distance, beyond which a model is not drawn at all, stays the title's.
+    /// The last distance, beyond which a model is not drawn at all, stays the title's; above 1
+    /// (a picture with more pixels than the console's, where its coarser forms show) none goes
+    /// beyond it.
     double lod_scale{1.0};
     /// The largest size of the sun's shadow maps (1024 or 1536), 0 to leave the title's.
     int shadow_map_size{0};
+    /// The smallest size of the sun's shadow maps (1536 or 2048, the largest the title's own
+    /// base file has): levels that ask for less get that much, except those whose sun shadows
+    /// are left out (LeavesSunShadowsOut). 0 leaves the title's.
+    int shadow_map_min{0};
+    /// The smallest size of the spot lights' shadow maps (1024: what the space the title keeps
+    /// for them holds, eight of 1024x1024; the world select, the second spider boss and the
+    /// television ask for 512, and levels entered from the world select were seen to keep its
+    /// 512). 0 leaves the title's.
+    int spot_shadow_map_min{0};
+    /// How far away (metres) the sun's near shadow cascade ends at most; 0 leaves the title's.
+    /// The title splits the reach of its sun shadows (<DirShadowFar>) into two cascades of
+    /// equal maps, the near one ending between the halfway point and the logarithmic split as
+    /// <DirShadowSplitLogRatio> says (0.2 in the base file): 4 m of a 10 m reach, 8 m of 20, 16
+    /// m of 40. In a headset at several times the console's pixels the near cascade's pixels
+    /// show as blurred blobs of shadow; a file whose near cascade ends farther than this gets
+    /// the ratio that ends it here (NearSplitRatio), the far cascade then reaching nearer.
+    double near_split{0.0};
     /// false turns the title's depth pre-pass off.
     bool depth_prepass{true};
     /// How far away (metres) models still get the depth pre-pass, and how small they may be
@@ -43,7 +63,9 @@ struct Detail {
     int dark_sun{1};
 
     bool IsTitles() const {
-        return lod_scale == 1.0 && shadow_map_size == 0 && depth_prepass && dark_sun == 0 &&
+        return lod_scale == 1.0 && shadow_map_size == 0 && shadow_map_min == 0 &&
+               spot_shadow_map_min == 0 && near_split == 0.0 && depth_prepass &&
+               dark_sun == 0 &&
                prepass_distance < 0.0 && prepass_radius < 0.0;
     }
 };
@@ -144,6 +166,56 @@ inline bool LeavesSunShadowsOut(const Detail& detail, std::string_view name) {
            (detail.dark_sun >= 2 && listed(MixedSunFiles));
 }
 
+/// The near distance the title's cascades are split from: its camera's near plane, taken as
+/// 0.1 m (the result moves by centimetres between 0.05 and 0.1).
+constexpr double CascadeNear = 0.1;
+/// The base file's split ratio, which a file without one keeps.
+constexpr double BaseSplitRatio = 0.2;
+
+/// Where the title ends the near one of its two sun shadow cascades (its cascade set-up,
+/// 0xf9c280 in the build of the disc): the split ratio's share of the logarithmic split,
+/// near x (far / near)^(1/2), the rest of the even one, (near + far) / 2.
+inline double NearCascadeEnd(double far, double ratio) {
+    const double logarithmic = std::sqrt(CascadeNear * far);
+    const double even = (CascadeNear + far) / 2.0;
+    return ratio * logarithmic + (1.0 - ratio) * even;
+}
+
+/// The split ratio (<DirShadowSplitLogRatio>) that `text`, a scene parameter file, is to have
+/// for `detail.near_split`; below zero where it keeps its own: it names no reach of its own
+/// (<DirShadowFar>; it has the base file's or the scene's before it, with their ratio), its
+/// near cascade ends near enough already, or its sun shadows are left out.
+inline double NearSplitRatio(std::string_view text, const Detail& detail,
+                             std::string_view name = {}) {
+    if (detail.near_split <= 0.0 || LeavesSunShadowsOut(detail, name)) {
+        return -1.0;
+    }
+    const auto number = [&](std::string_view tag, double otherwise) {
+        const std::string open = "<" + std::string{tag} + ">";
+        const size_t at = text.find(open);
+        if (at == std::string_view::npos) {
+            return otherwise;
+        }
+        const std::string value{text.substr(at + open.size(), 32)};
+        char* end = nullptr;
+        const double parsed = std::strtod(value.c_str(), &end);
+        return end == value.c_str() ? otherwise : parsed;
+    };
+    const double far = number("DirShadowFar", 0.0);
+    if (far <= CascadeNear) {
+        // None, or 0: no limit to the title (the whale's inside), a reach not known here.
+        return -1.0;
+    }
+    const double ratio = std::clamp(number("DirShadowSplitLogRatio", BaseSplitRatio), 0.0, 1.0);
+    if (NearCascadeEnd(far, ratio) <= detail.near_split + 0.01) {
+        return -1.0;
+    }
+    const double logarithmic = NearCascadeEnd(far, 1.0);
+    const double even = NearCascadeEnd(far, 0.0);
+    const double wanted = (even - detail.near_split) / (even - logarithmic);
+    return std::clamp(wanted, ratio, 1.0);
+}
+
 /// `text` (a scene parameter file) with `detail` applied. `base` is true for the file every
 /// scene drawn for the headset starts from (default_hmd.spx): a setting that the title leaves
 /// to its default is added there to be changed. `name` is the file's name.
@@ -160,6 +232,17 @@ inline std::string Adjust(std::string_view text, const Detail& detail, bool base
         result = SetValue(std::move(result), "DirShadowMapSize", "1024");
     }
     if (detail.lod_scale != 1.0) {
+        // Farther than the last distance (beyond which models are not drawn) no coarser form
+        // begins: the canyons' 60 m would otherwise pass their 100. A file without one has the
+        // base file's (default_hmd.spx: 1000 m), the world select's 1000 m among them.
+        static constexpr double BaseLast = 1000.0;
+        double last = 0.0;
+        if (detail.lod_scale > 1.0) {
+            const std::string_view open = "<Distance3>";
+            const size_t at = result.find(open);
+            last = at != std::string::npos ? std::strtod(result.c_str() + at + open.size(), nullptr)
+                                           : BaseLast;
+        }
         for (const std::string_view tag : {"Distance0", "Distance1", "Distance2"}) {
             result = ReplaceValues(std::move(result), tag, [&](std::string_view value) {
                 const std::string number{value};
@@ -168,7 +251,11 @@ inline std::string Adjust(std::string_view text, const Detail& detail, bool base
                 if (end == number.c_str()) {
                     return number;
                 }
-                return FormatNumber(distance * detail.lod_scale);
+                double scaled = distance * detail.lod_scale;
+                if (last > 0.0 && scaled > last) {
+                    scaled = std::max(distance, last);
+                }
+                return FormatNumber(scaled);
             });
         }
     }
@@ -178,6 +265,24 @@ inline std::string Adjust(std::string_view text, const Detail& detail, bool base
             return size > detail.shadow_map_size ? std::to_string(detail.shadow_map_size)
                                                  : std::string{value};
         });
+    }
+    if (detail.shadow_map_min != 0 && !LeavesSunShadowsOut(detail, name)) {
+        result = ReplaceValues(std::move(result), "DirShadowMapSize", [&](std::string_view value) {
+            const int size = std::atoi(std::string{value}.c_str());
+            return size > 0 && size < detail.shadow_map_min ? std::to_string(detail.shadow_map_min)
+                                                            : std::string{value};
+        });
+    }
+    if (detail.spot_shadow_map_min != 0) {
+        result = ReplaceValues(std::move(result), "SpotShadowMapSize", [&](std::string_view value) {
+            const int size = std::atoi(std::string{value}.c_str());
+            return size > 0 && size < detail.spot_shadow_map_min
+                       ? std::to_string(detail.spot_shadow_map_min)
+                       : std::string{value};
+        });
+    }
+    if (const double ratio = NearSplitRatio(result, detail, name); ratio >= 0.0) {
+        result = SetValue(std::move(result), "DirShadowSplitLogRatio", FormatNumber(ratio));
     }
     if (base && detail.prepass_distance >= 0.0) {
         result = SetValue(std::move(result), "DepthPrePassMaxDistance",
