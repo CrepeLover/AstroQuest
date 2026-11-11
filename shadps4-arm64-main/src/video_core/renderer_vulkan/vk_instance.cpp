@@ -242,7 +242,6 @@ bool Instance::CreateDevice() {
                           vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
                           vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT,
                           vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT,
-                          vk::PhysicalDeviceCoverageReductionModeFeaturesNV,
                           vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
                           vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT>();
     features = feature_chain.get().features;
@@ -373,22 +372,27 @@ bool Instance::CreateDevice() {
         amd_mixed_attachment_samples =
             add_extension(VK_AMD_MIXED_ATTACHMENT_SAMPLES_EXTENSION_NAME);
     }
-    shader_atomic_float = add_extension(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+    // With NVIDIA's mixed samples a colour sample is covered wherever any raster sample it
+    // stands for is: what the coverage can be narrowed to (GraphicsPipeline: the seams of
+    // blended quads).
     if (nv_framebuffer_mixed_samples &&
-        feature_chain.get<vk::PhysicalDeviceCoverageReductionModeFeaturesNV>().coverageReductionMode) {
-        coverage_reduction = add_extension(VK_NV_COVERAGE_REDUCTION_MODE_EXTENSION_NAME);
-        if (coverage_reduction) {
-            auto combinations = physical_device.getSupportedFramebufferMixedSamplesCombinationsNV();
-            if (combinations.result == vk::Result::eSuccess) {
-                coverage_combinations = std::move(combinations.value);
-            } else {
-                coverage_reduction = false;
-                LOG_WARNING(Render_Vulkan, "Coverage combination query failed; using existing fallback");
-            }
-            LOG_INFO(Render_Vulkan, "Coverage reduction enabled: {} supported combinations",
-                     coverage_combinations.size());
+        std::ranges::find(available_extensions, VK_NV_COVERAGE_REDUCTION_MODE_EXTENSION_NAME) !=
+            available_extensions.end() &&
+        physical_device
+            .getFeatures2<vk::PhysicalDeviceFeatures2,
+                          vk::PhysicalDeviceCoverageReductionModeFeaturesNV>()
+            .get<vk::PhysicalDeviceCoverageReductionModeFeaturesNV>()
+            .coverageReductionMode) {
+        auto combinations = physical_device.getSupportedFramebufferMixedSamplesCombinationsNV();
+        if (combinations.result == vk::Result::eSuccess &&
+            add_extension(VK_NV_COVERAGE_REDUCTION_MODE_EXTENSION_NAME)) {
+            coverage_reduction = true;
+            coverage_combinations = std::move(combinations.value);
         }
+        LOG_INFO(Render_Vulkan, "Coverage reduction: {} ({} combinations of samples)",
+                 coverage_reduction, coverage_combinations.size());
     }
+    shader_atomic_float = add_extension(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
     shader_atomic_float2 = add_extension(VK_EXT_SHADER_ATOMIC_FLOAT_2_EXTENSION_NAME);
     if (shader_atomic_float2) {
         shader_atomic_float2_features =
@@ -590,7 +594,7 @@ bool Instance::CreateDevice() {
         },
         // Extensions
         vk::PhysicalDeviceCoverageReductionModeFeaturesNV{
-            .coverageReductionMode = coverage_reduction,
+            .coverageReductionMode = true,
         },
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT{
             .customBorderColors = true,
@@ -666,11 +670,11 @@ bool Instance::CreateDevice() {
         },
     };
 
-    if (!custom_border_color) {
-        device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
-    }
     if (!coverage_reduction) {
         device_chain.unlink<vk::PhysicalDeviceCoverageReductionModeFeaturesNV>();
+    }
+    if (!custom_border_color) {
+        device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
     }
     if (!dynamic_state_3) {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();

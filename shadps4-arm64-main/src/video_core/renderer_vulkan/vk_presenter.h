@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
-#include "core/vr/mirror_limiter.h"
 
 #include <condition_variable>
 #include <span>
 
 #include "core/libraries/videoout/buffer.h"
+#include "core/vr/mirror_limiter.h"
 #include "imgui/imgui_texture.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
@@ -145,6 +145,7 @@ private:
     void SetExpectedGameSize(s32 width, s32 height);
 
 private:
+    /// When the window next shows the headset's picture.
     Core::Vr::MirrorLimiter mirror_limiter;
     std::optional<float> expected_ratio{1920.0 / 1080.0f};
     u32 expected_frame_width{1920};

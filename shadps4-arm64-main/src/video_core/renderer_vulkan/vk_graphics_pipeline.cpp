@@ -140,52 +140,55 @@ GraphicsPipeline::GraphicsPipeline(
         };
     }
 
-    // A single-sample additive target must not accumulate a full contribution from
-    // both triangles along a shared edge merely because their depth/stencil target
-    // has more samples. Selecting one coverage sample avoids those bright seams.
-    // Keep this workaround restricted to the RGB-only additive configuration
-    // verified in Astro Bot; ordinary multisampled color passes are unaffected.
-    using BlendFactor = AmdGpu::BlendControl::BlendFactor;
-    using BlendFunc = AmdGpu::BlendControl::BlendFunc;
-    const auto rgb_mask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB;
-    const auto& blend = key.blend_controls[0];
-    const bool additive_single_sample =
-        key.num_color_attachments == 1 && key.color_samples[0] == 1 &&
-        key.num_samples > 1 && key.write_masks[0] == rgb_mask && blend.enable &&
-        blend.color_src_factor == BlendFactor::SrcAlpha &&
-        blend.color_dst_factor == BlendFactor::One && blend.color_func == BlendFunc::Add;
-
-    // Apply on cache reload too, without serializing a stack pointer.
-    const vk::SampleMask single_sample_mask = 1;
+    // The title draws into colour targets of one sample with a depth buffer of more, which
+    // NVIDIA's mixed samples keep. There a colour sample counts as covered wherever any raster
+    // sample it stands for is, so the pixels along an edge two triangles share are drawn into
+    // by both: where the title blends (the glows and texts of its menus, two triangles a quad)
+    // each quad shows a bright line along its diagonal, one in each eye. A blending pipeline
+    // has each colour sample take the coverage of one raster sample only (TRUNCATE), or, where
+    // the driver cannot, keeps the first raster sample of its one colour sample. After
+    // evertec82/AstroQuest. (On a copy: the state the pipeline cache keeps holds no pointers.)
+    // Unlike a mask of one, TRUNCATE keeps a raster sample for every colour sample (a target of
+    // four samples keeps its whole contribution) and still tests and writes every sample of the
+    // depth buffer. Without TRUNCATE the border shader evertec82 verified this on
+    // (VerifiedBorderShader) keeps the first raster sample on a target of several samples too.
+    // A fragment shader named in user/diagnostic_coverage_ps (vk_presenter.cpp: pipelines of
+    // their own, for 15 s) is drawn with the first raster sample only, on any GPU, to compare.
     auto multisampling = sdata.multisampling;
-    const u32 raster_samples = static_cast<u32>(multisampling.rasterizationSamples);
-    const u32 depth_samples = (static_cast<u32>(key.z_format) != 0 ||
-                              static_cast<u32>(key.stencil_format) != 0)
-                                 ? key.depth_samples : 0;
-    const bool mixed_transparency = key.num_color_attachments == 1 && blend.enable &&
-                                   key.color_samples[0] != 0 &&
-                                   raster_samples > key.color_samples[0];
-    // Unlike a mask of one, TRUNCATE retains one independent coverage sample for
-    // EVERY color sample. That prevents shared-edge double blending without
-    // reducing a four-sample target to a quarter of its normal contribution.
-    const vk::PipelineCoverageReductionStateCreateInfoNV coverage_state{
+    const vk::SampleMask first_sample = 1;
+    const vk::PipelineCoverageReductionStateCreateInfoNV truncate = {
         .coverageReductionMode = vk::CoverageReductionModeNV::eTruncate,
     };
-    const bool truncate_coverage = mixed_transparency &&
-        instance.SupportsCoverageTruncate(raster_samples, key.color_samples[0], depth_samples);
-    const bool verified_border = mixed_transparency &&
-        key.stage_hashes[u32(Shader::LogicalStage::Fragment)] == 0xdd8ac3c2dfeULL;
-    if (diagnostic_single_sample || additive_single_sample ||
-        (verified_border && !truncate_coverage)) {
-        multisampling.pSampleMask = &single_sample_mask;
-        LOG_INFO(Render_Vulkan, "Single-sample additive coverage ps={:#x} samples={} mask=1",
-                 key.stage_hashes[u32(Shader::LogicalStage::Fragment)], key.num_samples);
-    } else if (truncate_coverage) {
-        multisampling.pNext = &coverage_state;
-        LOG_INFO(Render_Vulkan, "Transparent coverage truncate ps={:#x} raster={} color={} depth={}",
-                 key.stage_hashes[u32(Shader::LogicalStage::Fragment)], raster_samples,
-                 key.color_samples[0], depth_samples);
+    const u64 ps_hash = key.stage_hashes[u32(Shader::LogicalStage::Fragment)];
+    const u32 raster_samples = static_cast<u32>(multisampling.rasterizationSamples);
+    const u32 target_samples = key.color_samples[0];
+    if (diagnostic_single_sample) {
+        multisampling.pSampleMask = &first_sample;
+        LOG_INFO(Render_Vulkan, "Diagnostic single-sample coverage ps={:#x} samples={} mask=1",
+                 ps_hash, key.num_samples);
+    } else if (instance.IsNvMixedSamplesSupported() && key.num_color_attachments == 1 &&
+               key.blend_controls[0].enable && target_samples != 0 &&
+               raster_samples > target_samples) {
+        static constexpr u64 VerifiedBorderShader = 0xdd8ac3c2dfeULL;
+        const bool depth = key.z_format != AmdGpu::DepthBuffer::ZFormat::Invalid ||
+                           key.stencil_format != AmdGpu::DepthBuffer::StencilFormat::Invalid;
+        const u32 depth_samples = depth ? key.depth_samples : 0u;
+        if (instance.IsCoverageTruncateSupported(raster_samples, target_samples, depth_samples)) {
+            multisampling.pNext = &truncate;
+            LOG_INFO(Render_Vulkan,
+                     "Transparent coverage truncate ps={:#x} raster={} color={} depth={}", ps_hash,
+                     raster_samples, target_samples, depth_samples);
+        } else if (target_samples == 1 || ps_hash == VerifiedBorderShader) {
+            multisampling.pSampleMask = &first_sample;
+            LOG_INFO(Render_Vulkan,
+                     "Single-sample coverage ps={:#x} raster={} color={} depth={} mask=1",
+                     ps_hash, raster_samples, target_samples, depth_samples);
+        } else {
+            LOG_INFO(Render_Vulkan,
+                     "Transparent coverage as the driver has it ps={:#x} raster={} color={} "
+                     "depth={}",
+                     ps_hash, raster_samples, target_samples, depth_samples);
+        }
     }
 
     const vk::PipelineViewportDepthClipControlCreateInfoEXT clip_control = {

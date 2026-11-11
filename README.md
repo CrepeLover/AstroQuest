@@ -1,4 +1,6 @@
 > **Enhanced fork v0.8.7:** merges upstream v0.22 with our transparency, pacing, resolution and crash-reporting changes. Downloads include PC VR, Quest, PICO and Galaxy XR. Standalone startup settings now include a 45 FPS cap.
+>
+> **This branch (frame-controller):** the v0.8.7 fork above with upstream AstroQuest v0.23 merged in, plus Steam Frame controller bindings, 16x anisotropic filtering, MLAA on the headset pictures, model detail kept farther away, larger shadow maps (the sun's up to 8192) and real occlusion queries for the sun's glare. PC build notes and scripts are in `local/`.
 
 
 # AstroQuest
@@ -89,7 +91,7 @@ Download `AstroQuest-<version>-Quest3.apk` from the
    debugging in the headset, and run
 
    ```sh
-   adb install -r AstroQuest-0.22-Quest3.apk
+   adb install -r AstroQuest-0.23-Quest3.apk
    ```
 
    (or drag the APK onto SideQuest).
@@ -152,6 +154,8 @@ Playing:
   - **left trigger (L2): pull back, let go to shoot**: the catapult at the end of every
     level (point the controller at the goal)
   - the right stick is a finger on it, for anything else.
+- **R1 swipes forward on a DualSense or DualShock 4 too**, faster than a thumb on the pad:
+  the throwing stars of the last boss.
 - With both at hand, the game is played with the one you used last: a button on the other
   changes over.
 - **To turn round without turning yourself** (on a seat that does not turn): hold the left
@@ -324,7 +328,9 @@ use it only with software you own and have dumped yourself.
   [ODevStudio](https://github.com/ODevStudio) for SteamVR and Valve Index support and the
   desktop's spectator views, [Clodo76](https://github.com/Clodo76) for finding the game's
   1.04 executable from inside, [evertec82](https://github.com/evertec82) for what stopped the
-  game under SteamVR.
+  game under SteamVR and, in their fork, the fix for NVIDIA's seams and blurred edges, a frame
+  for every refresh, and finer frame pacing (with work of
+  [elliotttate](https://github.com/elliotttate)), taken into 0.23.
 - [The Khronos Group](https://www.khronos.org/) for OpenXR and Vulkan,
   [vgmstream](https://github.com/vgmstream/vgmstream) for documenting Sony's audio formats,
   and [Virtual Desktop](https://www.vrdesktop.net/) for the PC streaming path.

@@ -203,8 +203,73 @@ Check "3960 eye height" (EyeHeight 3960) 4224
 Check "4320 eye height" (EyeHeight 4320) 4608
 # Sizes and frame rates offered.
 Check "The console's smaller sizes keep their own shape" ((@(816, 960, 1200) | ForEach-Object { EyeHeight $_ }) -join ",") "870,1080,1280"
-Check "Larger sizes keep the shape of 1440x1536" ((@(1440, 2880, 3600) | ForEach-Object { EyeHeight $_ }) -join ",") "1536,3072,3840"
+Check "Larger sizes keep the shape of 1440x1536" ((@(1440, 2880, 3600, 4320) | ForEach-Object { EyeHeight $_ }) -join ",") "1536,3072,3840,4608"
+Check "The largest size is the most the emulator draws (4320)" $widths[-1] 4320
 Check "80 frames a second is offered (a Rift S refreshes at 80 Hz)" ($caps -contains "80") $true
+Check "A frame for every refresh is offered first" $caps[0] "full"
+$script:settings = [ordered]@{}
+Check "No fps line is a frame for every refresh" (Get-FpsSetting) "full"
+$script:settings = [ordered]@{ fps = "60" }
+Check "fps=60 stays 60" (Get-FpsSetting) "60"
+$script:settings = [ordered]@{ fps = " Full " }
+Check "fps=Full is full" (Get-FpsSetting) "full"
+$script:settings = [ordered]@{ fps = "100" }
+Check "A number the menu does not offer is kept" (Get-FpsSetting) "100"
+$script:settings = [ordered]@{ fps = "fast" }
+Check "Words other than full are full" (Get-FpsSetting) "full"
+$script:settings = [ordered]@{ fps = "5" }
+Check "Fewer than 10 frames a second is full" (Get-FpsSetting) "full"
+# A newer release.
+Check "0.22 is a release" (ConvertTo-ReleaseVersion "0.22") "0.22.0"
+Check "v0.21.1 is a release" (ConvertTo-ReleaseVersion "v0.21.1") "0.21.1"
+Check "A hash is no release" ($null -eq (ConvertTo-ReleaseVersion "9a3624b")) $true
+Check "0.22 is later than 0.21.1" ((ConvertTo-ReleaseVersion "0.22") -gt (ConvertTo-ReleaseVersion "0.21.1")) $true
+$script:ownVersion = "0.22"
+function Get-OwnVersion { return $script:ownVersion }
+$answer = { param($tag) [System.Threading.Tasks.Task]::FromResult('{"tag_name":"' + $tag + '","name":"AstroQuest"}') }
+Check "A later release is told of" (Get-UpdateNotice (& $answer "v0.23")) "AstroQuest 0.23 is out (this is 0.22): https://github.com/bigmak94/AstroQuest/releases/latest"
+Check "The same release is not" (Get-UpdateNotice (& $answer "v0.22")) ""
+Check "An earlier one is not" (Get-UpdateNotice (& $answer "v0.21.1")) ""
+Check "A tag that is no version is not" (Get-UpdateNotice (& $answer "latest")) ""
+Check "No answer is nothing to tell" (Get-UpdateNotice $null) ""
+Check "A failed request is nothing to tell" (Get-UpdateNotice ([System.Threading.Tasks.Task]::FromException([string], (New-Object System.Exception "offline")))) ""
+$script:settings = [ordered]@{ update_check = "0" }
+Check "update_check=0 asks nothing" ($null -eq (Start-UpdateCheck)) $true
+$script:settings = [ordered]@{}
+$script:ownVersion = ""
+Check "A copy made from the source asks nothing" ($null -eq (Start-UpdateCheck)) $true
+
+# What the frame rate tells the emulator: all of it in Set-FramePacing, called in one place.
+# (The emulator gives every frame one refresh unless told SHADPS4_VR_PACE=0, so a limit comes
+# with that.)
+$pacing = @($ast.EndBlock.Statements | Where-Object {
+    $_ -isnot [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    ($_.Extent.Text -match '^Set-FramePacing\b' -or $_.Extent.Text -match '\$env:SHADPS4_VR_(PACE|FASTEST_PACE|FPS_CAP)\s*=') })
+Check "The launcher has one place that tells the emulator the frame rate" $pacing.Count 1
+Check "That place is Set-FramePacing" $pacing[0].Extent.Text "Set-FramePacing"
+foreach ($case in @(@{ fps = "full"; pace = "1"; fastest = "1"; cap = "" }, @{ fps = " Full "; pace = "1"; fastest = "1"; cap = "" },
+                    @{ fps = "60"; pace = "0"; fastest = "1"; cap = "60" }, @{ fps = "100"; pace = "0"; fastest = "1"; cap = "100" })) {
+    foreach ($name in @("SHADPS4_VR_PACE", "SHADPS4_VR_FASTEST_PACE", "SHADPS4_VR_FPS_CAP")) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    $script:settings = [ordered]@{ fps = $case.fps }
+    Set-FramePacing
+    Check "fps=$($case.fps): refreshes a frame" $env:SHADPS4_VR_PACE $case.pace
+    Check "fps=$($case.fps): fewest refreshes a frame" $env:SHADPS4_VR_FASTEST_PACE $case.fastest
+    Check "fps=$($case.fps): frames a second at most" $env:SHADPS4_VR_FPS_CAP $case.cap
+}
+# pace, the older way to say fps, is not read: fps (or a diagnostic mode's SHADPS4_VR_PACE)
+# decides whatever a pace= line says.
+foreach ($case in @(@{ fps = "60"; pace = "1"; before = ""; want = "0"; cap = "60" }, @{ fps = "full"; pace = "3"; before = ""; want = "1"; cap = "" },
+                    @{ fps = "full"; pace = "3"; before = "1"; want = "1"; cap = "" }, @{ fps = "60"; pace = "1"; before = "0"; want = "0"; cap = "60" })) {
+    foreach ($name in @("SHADPS4_VR_PACE", "SHADPS4_VR_FASTEST_PACE", "SHADPS4_VR_FPS_CAP")) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+    if ($case.before -ne "") { $env:SHADPS4_VR_PACE = $case.before }
+    $script:settings = [ordered]@{ fps = $case.fps; pace = $case.pace }
+    Set-FramePacing
+    $what = "fps=$($case.fps) pace=$($case.pace), SHADPS4_VR_PACE='$($case.before)' before"
+    Check "${what}: refreshes a frame" $env:SHADPS4_VR_PACE $case.want
+    Check "${what}: fewest refreshes a frame" $env:SHADPS4_VR_FASTEST_PACE "1"
+    Check "${what}: frames a second at most" $env:SHADPS4_VR_FPS_CAP $case.cap
+}
+foreach ($name in @("SHADPS4_VR_PACE", "SHADPS4_VR_FASTEST_PACE", "SHADPS4_VR_FPS_CAP")) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
 
 # The Visual C++ runtime: looked for where a 64-bit program finds it, whatever PowerShell this is.
 $runtimeFolder = Join-Path $base "system"
@@ -268,6 +333,7 @@ function Show-Form($form) {
     if ($script:menuAction -eq "choose") {
         Check "Menu defaults to Full framerate" $form.Controls["fps"].SelectedIndex 0
         Check "Menu defaults to 2880 an eye" $widths[$resolution.Value] 2880
+        Check "Menu defaults to a frame for every refresh" $caps[$fps.SelectedIndex] "full"
         $resolution.Value = [array]::IndexOf($widths, 960)
         $fps.SelectedIndex = [array]::IndexOf($caps, "80")
         Check "Menu defaults to Windows' language" $language.SelectedIndex 0
@@ -286,7 +352,7 @@ function Show-Form($form) {
     Check "Menu restores highest resolution" $widths[$resolution.Value] 4320
     Check "Menu restores French" $language.SelectedIndex (1 + [array]::IndexOf($gameLanguages, "fr-FR"))
     Check "Menu restores 4320 an eye" $widths[$resolution.Value] 4320
-    Check "Menu restores 80 frames a second" $caps[$fps.SelectedIndex] 80
+    Check "Menu restores 80 frames a second" $caps[$fps.SelectedIndex] "80"
     if ($script:menuAction -eq "restore") { $language.SelectedIndex = 0 }
     Check "Menu restores combined eyes" $view.SelectedIndex 2
     Check "Menu restores crop" $crop.Checked $true
