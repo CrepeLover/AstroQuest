@@ -1,0 +1,42 @@
+AstroQuest PC VR v0.8.7
+Integrates upstream 0.22: runtime queue safety, six-site soccer timing, exception diagnostics, VRAM governor and US game support.
+Source commit: 8028ef3a959b957d2100580bcecad870bc081819
+Executable SHA256: 6dc018c779ff982f36afec5388dae2c8686144d2d372773400a01fcc7e8daa54
+
+Local build 2026-10-31: branch frame-controller in C:\Games\AstroQuest-src (v0.8.7 + Steam Frame controller bindings, uncommitted), built with C:\Games\astroquest-work\build-astroquest.cmd.
+Local executable SHA256: 92e9ec12f9d4e35e560eedf61d76dc4cc1fb4501b8232c9d73d8c4d9cf790cb3
+Stock v0.8.7 executable kept in C:\Games\AstroQuest\stock-v0.8.7.
+
+Local build 2026-11-01: same branch + controller input logging in shad_log.txt ("Controller profile", "Controller bindings", "Controller input: held [...]"; capped; SHADPS4_XR_INPUT_LOG=0 turns it off).
+Local executable SHA256: b4144eb394bafc27a40ca7b52c03eee009934db9916be94cb73ed05145c0a508
+Previous local build (2026-10-31) kept as C:\Games\astroquest-work\shadps4-frame-v1.exe.
+
+Local build 2026-11-01 (2): + anisotropic filtering raised to 16x on mipmapped textures (src/video_core/texture_cache/sampler.cpp; settings.txt env=SHADPS4_FORCE_ANISO=0 restores the game's own 2x/4x).
+Local executable SHA256: a290a44e495d64ab7bd2d204628c099d5a51c1f4832d02d5ea80482ddbe85f9a
+
+Local build 2026-11-01 (3): + MLAA (morphological anti-aliasing) on the headset pictures, in host_shaders/post_process.frag before sharpening (smoothed pixels are not sharpened). On at full strength; settings.txt env=SHADPS4_VR_MLAA=0 turns it off, 0.5 halves it.
+Local executable SHA256: 5e2f1ee58e19cd563d2f7d8ade4574d3a2541133322c096abc4927bf8f0568ef
+
+2026-11-01: + SHADPS4_TITLE_LOD up to 4 (detail distances capped at each level's cutoff) and SHADPS4_TITLE_SHADOW_MAP_MIN (raise the sun's shadow maps to 1536/2048, black-sun levels excepted)
+Local executable SHA256: c8a0c8578fa4b1e4444d90f8fbd90c931b3090cc05f7432fb23ec389284b7b89
+
+2026-11-01 local build: + SHADPS4_TITLE_SHADOW_MAPS_DOUBLED (shadow map size enum patch, build 1.00) + depth-array log
+Local executable SHA256: ef695fd3c900c482e80a4ee891c3459ef7235e3288b2fdbffb078bc10f8afac1
+
+2026-11-01 local build: + SHADPS4_TITLE_SPOT_SHADOW_MAP_MIN=1024 (spot light shadow maps raised from 512 in world_select/spider_boss_setings4/default_tv)
+Local executable SHA256: 6bdccd61374fee2982aa6d6143e97cce6bbf99cc30aebef9af14828adaed9164
+
+2026-11-01 local build: SHADPS4_TITLE_SUN_SHADOW_4096 (sun 2048 target made 4096 + scene value + reset + cascade snap; replaces SHADOW_MAPS_DOUBLED) and SHADPS4_TITLE_SHADOW_NEAR_SPLIT=<m> (DirShadowSplitLogRatio per file)
+Local executable SHA256: f24419941748aff567889cee662d3898b193d82617ff44e5f20869b544a98249
+
+2026-11-01 local build: SUN_SHADOW_4096 also grows the title's 50 MB shadow pool to 100 MB (+heap 50 MB); 22:02 run stopped with 'RenderTarget memory is full'
+Local executable SHA256: 0a2ee5db247c41119a3fba94bc651909f7439b8a7e155d6e8983a0a61a2b2e06
+
+2026-11-01 local build: SHADPS4_TITLE_SUN_SHADOW_MAP=4096|8192 (pool 100/292 MB; SUN_SHADOW_4096=1 still means 4096)
+Local executable SHA256: 0a2ee5db247c41119a3fba94bc651909f7439b8a7e155d6e8983a0a61a2b2e06
+
+2026-11-01 local build: SHADPS4_TITLE_SUN_SHADOW_MAP=4096|8192 (pool 100/292 MB; SUN_SHADOW_4096=1 still means 4096)
+Local executable SHA256: c073dacfcc2ef3a945e3210ff2b44dad463f9a4f0afe039a9d8e35a001f16965
+
+Local build 2026-11-03: real occlusion queries (vk_occlusion.cpp; SHADPS4_OCCLUSION_QUERIES=0 = old made-up counts), so the sun glare is hidden behind geometry
+Local executable SHA256: 3f783eb6ff109d9831137a6b1efaa559b2a69a246952da8a4a239c5ab2b0aebb
