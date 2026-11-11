@@ -14,6 +14,7 @@
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
 #include "video_core/renderer_vulkan/vk_gpu_profile.h"
+#include "video_core/renderer_vulkan/vk_occlusion.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -83,6 +84,9 @@ public:
     void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
     u32 ReadDataFromGds(u32 gsd_offset);
     bool InvalidateMemory(VAddr addr, u64 size);
+    /// A ZPASS_DONE dump of the title's occlusion counters (OcclusionQueries): whether it is
+    /// answered with the GPU's own counts rather than made up.
+    bool OcclusionDump(VAddr address, u32 num_pairs);
     bool ReadMemory(VAddr addr, u64 size);
     bool IsMapped(VAddr addr, u64 size);
     void MapMemory(VAddr addr, u64 size);
@@ -218,6 +222,8 @@ private:
     bool attachment_feedback_loop{};
     /// SHADPS4_GPU_PROFILE (see GpuProfile); null when not asked for.
     std::unique_ptr<GpuProfile> gpu_profile;
+    /// The title's occlusion queries (see OcclusionQueries); null when they are made up.
+    std::unique_ptr<OcclusionQueries> occlusion;
     /// SHADPS4_VR_FOVEATION (see Foveation); null when not asked for.
     std::unique_ptr<Foveation> foveation;
     /// Whether the title's last final pass read its scene with FSR 1 (TitleUpscale).

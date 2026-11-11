@@ -56,6 +56,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_,
     if (GpuProfile::Enabled()) {
         gpu_profile = std::make_unique<GpuProfile>(instance, scheduler);
     }
+    if (OcclusionQueries::Enabled()) {
+        occlusion = std::make_unique<OcclusionQueries>(instance, scheduler);
+        if (!occlusion->Ready()) {
+            occlusion.reset();
+        }
+    }
     if (Foveation::Level() > 0) {
         foveation = std::make_unique<Foveation>(instance, scheduler);
     }
@@ -70,6 +76,14 @@ float Rasterizer::UpscaledRadius() const {
 }
 
 Rasterizer::~Rasterizer() = default;
+
+bool Rasterizer::OcclusionDump(VAddr address, u32 num_pairs) {
+    if (!occlusion) {
+        return false;
+    }
+    occlusion->Dump(address, num_pairs);
+    return true;
+}
 
 static std::atomic<s32> g_draw_trace_budget{0};
 static std::atomic<u64> g_diagnostic_skip_shader{0};
@@ -335,6 +349,9 @@ void Rasterizer::ChooseUniformBuffers(bool graphics) const {
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     RENDERER_TRACE;
+    if (occlusion && !in_target_passes) {
+        occlusion->NoteDraw();
+    }
     ChooseUniformBuffers(true);
 
     scheduler.PopPendingOperations();
@@ -450,7 +467,9 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
         const char* value = std::getenv("SHADPS4_SKIP_EMPTY_DRAWS");
         return value == nullptr || value[0] != '0';
     }();
-    if (skip_empty && !FrameStats::AbOff("skipempty") && DrawsNothing(pipeline)) {
+    // (Not while an occlusion query is open: then what it lets through is what is asked.)
+    const bool counted = occlusion && occlusion->IsOpen();
+    if (skip_empty && !counted && !FrameStats::AbOff("skipempty") && DrawsNothing(pipeline)) {
         FrameStats::Add(FrameStats::Counter::EmptyDraws);
         if (trace) {
             LOG_INFO(Render_Vulkan, "TRACE   draw left out: it writes nothing");
@@ -507,12 +526,19 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
                                                           u64{num_vertices} * num_instances);
     {
         const FrameStats::CallTimer timer{FrameStats::Call::Draw};
+        const s32 query = counted ? occlusion->BeginDraw(cmdbuf) : -1;
         if (is_indexed) {
             cmdbuf.drawIndexed(num_vertices, num_instances, 0, s32(vertex_offset),
                                instance_offset);
         } else {
             cmdbuf.draw(num_vertices, num_instances, vertex_offset, instance_offset);
         }
+        if (counted) {
+            occlusion->EndDraw(cmdbuf, query);
+        }
+    }
+    if (counted && trace) {
+        LOG_INFO(Render_Vulkan, "TRACE   counted for an occlusion query");
     }
     if (timed) {
         gpu_profile->After();
@@ -759,6 +785,9 @@ GpuProfile::Work Rasterizer::ProfileWork(const Pipeline* pipeline) const {
 void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u32 stride,
                               u32 max_count, VAddr count_address) {
     RENDERER_TRACE;
+    if (occlusion) {
+        occlusion->NoteDraw();
+    }
     ChooseUniformBuffers(true);
 
     scheduler.PopPendingOperations();
@@ -811,6 +840,8 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     scheduler.BindGraphicsPipeline(pipeline->Handle());
 
     const bool timed = gpu_profile && gpu_profile->Before(ProfileWork(pipeline), 0);
+    const bool counted = occlusion && occlusion->IsOpen();
+    const s32 query = counted ? occlusion->BeginDraw(cmdbuf) : -1;
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
 
@@ -829,6 +860,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         } else {
             cmdbuf.drawIndirect(buffer->Handle(), base, max_count, stride);
         }
+    }
+    if (counted) {
+        occlusion->EndDraw(cmdbuf, query);
     }
     if (timed) {
         gpu_profile->After();

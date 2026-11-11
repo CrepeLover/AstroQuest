@@ -1225,6 +1225,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_rasterizer.h
                src/video_core/renderer_vulkan/vk_gpu_profile.cpp
                src/video_core/renderer_vulkan/vk_gpu_profile.h
+               src/video_core/renderer_vulkan/vk_occlusion.cpp
+               src/video_core/renderer_vulkan/vk_occlusion.h
                src/video_core/renderer_vulkan/vk_foveation.cpp
                src/video_core/renderer_vulkan/vk_foveation.h
                src/video_core/renderer_vulkan/vk_title_upscale.cpp
