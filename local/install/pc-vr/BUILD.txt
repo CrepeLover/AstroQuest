@@ -40,3 +40,7 @@ Local executable SHA256: c073dacfcc2ef3a945e3210ff2b44dad463f9a4f0afe039a9d8e35a
 
 Local build 2026-11-03: real occlusion queries (vk_occlusion.cpp; SHADPS4_OCCLUSION_QUERIES=0 = old made-up counts), so the sun glare is hidden behind geometry
 Local executable SHA256: 3f783eb6ff109d9831137a6b1efaa559b2a69a246952da8a4a239c5ab2b0aebb
+
+Local build 2026-11-10: AstroQuest v0.23 (bigmak94) merged into this v0.8.7 fork with our changes, branch frame-controller-v023 in C:\Games\AstroQuest-src, commit 2d189f4 (merge 37c4e2a, plus shadPS4 #5340 and #5377: no 33 ms smoothing on a DualSense's sticks and triggers). launch.ps1 and README-PC-VR.md are the merged ones. The pipeline cache stays valid (shader profile unchanged).
+Local executable SHA256: 22ee89c87de04262de915fbf6d13b23db736400c174871668df5790220737b9a
+Previous exe (3f783eb6, 2026-11-03), launcher, BUILD.txt and README kept in C:\Games\astroquest-work\before-v023-20261110-2104.
